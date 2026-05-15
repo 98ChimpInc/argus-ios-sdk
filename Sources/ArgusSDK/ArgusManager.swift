@@ -27,7 +27,7 @@ public final class ArgusManager: RemoteFlags {
     private var pollTimer: Timer?
     private var isInitialFetch = true
 
-    private let logger = Logger(subsystem: "com.telus.smarthome.argus", category: "ArgusManager")
+    private let logger = Logger(subsystem: "cloud.projectargus.sdk", category: "ArgusManager")
 
     // MARK: - Configuration
 
@@ -38,7 +38,7 @@ public final class ArgusManager: RemoteFlags {
     ///
     /// - Parameters:
     ///   - baseURL: Base URL of the Argus Cloud Function.
-    ///   - tenantId: Tenant identifier (e.g. "telus_ca").
+    ///   - tenantId: Tenant identifier (e.g. "acme_ca").
     ///   - environment: Target environment: "dev", "staging", or "prod".
     ///   - userId: Optional user identifier for rollout bucketing.
     ///   - pollInterval: Seconds between automatic fetches. Default: 300.

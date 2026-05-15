@@ -13,7 +13,7 @@ public struct ArgusConfiguration {
     /// Base URL of the Argus Cloud Function (e.g. "https://us-central1-argus-prod.cloudfunctions.net")
     public let baseURL: String
 
-    /// Tenant identifier (e.g. "telus_ca", "deutsche_telekom", "kddi_japan")
+    /// Tenant identifier (e.g. "acme_ca", "globex_de", "initech_jp")
     public let tenantId: String
 
     /// Target environment: "dev", "staging", or "prod"

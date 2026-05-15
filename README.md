@@ -1,6 +1,6 @@
 # Argus iOS SDK
 
-Drop-in replacement for `RemoteConfigManager` in the SmartHome+ iOS app. Conforms to the `RemoteFlags` protocol, fetches resolved flag values from the Argus HTTP endpoint, and caches them locally for synchronous access.
+Drop-in feature-flag client for iOS apps. Conforms to the `RemoteFlags` protocol, fetches resolved flag values from the Argus HTTP endpoint, and caches them locally for synchronous access.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ Drop-in replacement for `RemoteConfigManager` in the SmartHome+ iOS app. Conform
 Add the package to your `Package.swift` or via Xcode's package manager:
 
 ```swift
-.package(url: "https://github.com/nickshahin/telus-smarthome-argus-ios-sdk.git", from: "1.0.0")
+.package(url: "https://github.com/98ChimpInc/argus-ios-sdk.git", from: "1.0.0")
 ```
 
 ## Usage
@@ -24,12 +24,12 @@ import ArgusSDK
 let argus = ArgusManager()
 argus.configure(
     baseURL: "https://us-central1-argus-prod.cloudfunctions.net",
-    tenantId: "telus_ca",
+    tenantId: "acme_ca",
     environment: "prod"
 )
 
 // Synchronous reads from cache
-let enabled = argus.bool(forKey: "enable_sweepr")
+let enabled = argus.bool(forKey: "new_checkout_flow")
 let version = argus.string(forKey: "app_version")
 ```
 

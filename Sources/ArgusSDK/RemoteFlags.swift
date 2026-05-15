@@ -2,9 +2,9 @@
 //  RemoteFlags.swift
 //  ArgusSDK
 //
-//  Protocol definition copied from the SmartHome+ iOS app's DevelopmentFlags
-//  package. This allows ArgusSDK to be a standalone package without requiring
-//  DevelopmentFlags as a dependency.
+//  Protocol definition for accessing remotely-configured feature flags.
+//  Vendored into ArgusSDK so the package stays standalone with no external
+//  flag-protocol dependency.
 //
 
 import Foundation
