@@ -6,7 +6,9 @@ Drop-in feature-flag client for iOS apps. Conforms to the `RemoteFlags` protocol
 
 - iOS 15.0+
 - Swift 5.9+
-- Firebase Auth (for authenticated requests)
+- An Argus API key (Argus dashboard → Settings → API key)
+
+No Firebase dependency — the SDK authenticates with your Argus API key.
 
 ## Installation
 
@@ -23,7 +25,8 @@ import ArgusSDK
 
 let argus = ArgusManager()
 argus.configure(
-    baseURL: "https://us-central1-argus-prod.cloudfunctions.net",
+    apiKey: "argus_<your-key>",
+    baseURL: "https://us-central1-argus-app-f0ff3.cloudfunctions.net",
     tenantId: "acme_ca",
     environment: "prod"
 )

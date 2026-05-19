@@ -10,7 +10,6 @@
 import Foundation
 import Combine
 import OSLog
-import FirebaseAuth
 
 public final class ArgusManager: RemoteFlags {
 
@@ -37,12 +36,14 @@ public final class ArgusManager: RemoteFlags {
     /// defaults until the first HTTP response arrives.
     ///
     /// - Parameters:
+    ///   - apiKey: Argus API key for your Customer workspace.
     ///   - baseURL: Base URL of the Argus Cloud Function.
     ///   - tenantId: Tenant identifier (e.g. "acme_ca").
     ///   - environment: Target environment: "dev", "staging", or "prod".
     ///   - userId: Optional user identifier for rollout bucketing.
     ///   - pollInterval: Seconds between automatic fetches. Default: 300.
     public func configure(
+        apiKey: String,
         baseURL: String,
         tenantId: String,
         environment: String,
@@ -50,6 +51,7 @@ public final class ArgusManager: RemoteFlags {
         pollInterval: TimeInterval = 300
     ) {
         let config = ArgusConfiguration(
+            apiKey: apiKey,
             baseURL: baseURL,
             tenantId: tenantId,
             environment: environment,
@@ -231,20 +233,6 @@ public final class ArgusManager: RemoteFlags {
             return
         }
 
-        // Obtain Firebase Auth ID token
-        guard let currentUser = Auth.auth().currentUser else {
-            logger.debug("No authenticated user ... skipping fetch")
-            return
-        }
-
-        let idToken: String
-        do {
-            idToken = try await currentUser.getIDToken()
-        } catch {
-            logger.error("Failed to get ID token: \(error.localizedDescription)")
-            return
-        }
-
         // Build the request URL
         var components = URLComponents(string: configuration.baseURL)
         components?.path += "/resolveFlags"
@@ -268,7 +256,7 @@ public final class ArgusManager: RemoteFlags {
         }
 
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(idToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)

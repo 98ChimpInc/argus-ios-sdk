@@ -10,7 +10,13 @@ import Foundation
 
 public struct ArgusConfiguration {
 
-    /// Base URL of the Argus Cloud Function (e.g. "https://us-central1-argus-prod.cloudfunctions.net")
+    /// Argus API key for this Customer workspace. Sent as a Bearer token
+    /// on every resolveFlags request. Find it in the Argus dashboard
+    /// under Settings → API key.
+    public let apiKey: String
+
+    /// Base URL of the Argus resolveFlags Cloud Function
+    /// (e.g. "https://us-central1-argus-app-f0ff3.cloudfunctions.net")
     public let baseURL: String
 
     /// Tenant identifier (e.g. "acme_ca", "globex_de", "initech_jp")
@@ -26,12 +32,14 @@ public struct ArgusConfiguration {
     public let pollInterval: TimeInterval
 
     public init(
+        apiKey: String,
         baseURL: String,
         tenantId: String,
         environment: String,
         userId: String? = nil,
         pollInterval: TimeInterval = 300
     ) {
+        self.apiKey = apiKey
         self.baseURL = baseURL
         self.tenantId = tenantId
         self.environment = environment
