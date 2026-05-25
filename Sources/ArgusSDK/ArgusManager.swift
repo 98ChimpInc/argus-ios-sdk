@@ -58,6 +58,47 @@ public final class ArgusManager: RemoteFlags {
             userId: userId,
             pollInterval: pollInterval
         )
+        applyConfiguration(config)
+    }
+
+    /// Configure the SDK with an auto-detected environment.
+    ///
+    /// This overload omits the `environment` argument and resolves it
+    /// from the build context:
+    ///
+    /// - `#if DEBUG` → `"dev"`
+    /// - TestFlight (sandbox receipt URL) → `"staging"`
+    /// - App Store release → `"prod"`
+    ///
+    /// Use the 4-arg overload with an explicit `environment` if you
+    /// ship a non-standard mapping (e.g. a DEBUG build that talks to
+    /// a staging backend).
+    ///
+    /// - Parameters:
+    ///   - apiKey: Argus API key for your Customer workspace.
+    ///   - baseURL: Base URL of the Argus Cloud Function.
+    ///   - tenantId: Tenant identifier (e.g. "acme_ca").
+    ///   - userId: Optional user identifier for rollout bucketing.
+    ///   - pollInterval: Seconds between automatic fetches. Default: 300.
+    public func configure(
+        apiKey: String,
+        baseURL: String,
+        tenantId: String,
+        userId: String? = nil,
+        pollInterval: TimeInterval = 300
+    ) {
+        let config = ArgusConfiguration(
+            apiKey: apiKey,
+            baseURL: baseURL,
+            tenantId: tenantId,
+            userId: userId,
+            pollInterval: pollInterval
+        )
+        applyConfiguration(config)
+    }
+
+    /// Shared post-construction wiring for both `configure(...)` overloads.
+    private func applyConfiguration(_ config: ArgusConfiguration) {
         self.configuration = config
 
         // Load bundled defaults and seed the cache
