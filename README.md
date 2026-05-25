@@ -27,14 +27,48 @@ let argus = ArgusManager()
 argus.configure(
     apiKey: "argus_<your-key>",
     baseURL: "https://us-central1-argus-app-f0ff3.cloudfunctions.net",
-    tenantId: "acme_ca",
-    environment: "prod"
+    tenantId: "acme_ca"
 )
+// environment auto-resolves from build context ... see "Environment
+// auto-detection" below. Pass `environment: "..."` if you ship a
+// non-standard mapping.
 
 // Synchronous reads from cache
 let enabled = argus.bool(forKey: "new_checkout_flow")
 let version = argus.string(forKey: "app_version")
 ```
+
+## Environment auto-detection
+
+`environment:` is optional. If you omit it, the SDK resolves it from
+the build context:
+
+| Build context | Detected environment |
+|---|---|
+| `#if DEBUG` (Xcode Run, simulator, archive with DEBUG defined) | `"dev"` |
+| TestFlight (App Store receipt URL ends in `sandboxReceipt`) | `"staging"` |
+| App Store release | `"prod"` |
+
+The receipt-URL check is the standard idiom for distinguishing
+TestFlight from production builds. It uses no private API and works on
+first launch regardless of purchase history.
+
+Pass an explicit `environment` argument if your team uses a
+non-standard mapping (for example, a DEBUG build that talks to a
+staging backend, or a TestFlight build that resolves prod flags):
+
+```swift
+argus.configure(
+    apiKey: "argus_<your-key>",
+    baseURL: "https://us-central1-argus-app-f0ff3.cloudfunctions.net",
+    tenantId: "acme_ca",
+    environment: "staging" // overrides auto-detection
+)
+```
+
+You can read the auto-detected value directly via
+`ArgusConfiguration.autoDetectedEnvironment` if you need to log it or
+display it in a debug overlay.
 
 ## Architecture
 
