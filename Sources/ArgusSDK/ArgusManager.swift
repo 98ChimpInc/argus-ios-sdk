@@ -2,9 +2,19 @@
 //  ArgusManager.swift
 //  ArgusSDK
 //
-//  Drop-in replacement for RemoteConfigManager. Conforms to RemoteFlags,
-//  fetches resolved flag values from the Argus HTTP endpoint, and caches
-//  them locally for synchronous access.
+//  Drop-in replacement for RemoteConfigManager. Conforms to RemoteFlags.
+//
+//  PRIMARY channel: real-time push (CANONICAL, DECISIONS.md 2026-06-02).
+//  On start the manager trades its apiKey for a scoped Firebase custom
+//  token (issueStreamToken), signs in, and opens Firestore snapshot
+//  listeners on its Product's flag / env / tenant / condition docs. Any
+//  change re-resolves all flags client-side (mirroring the server
+//  resolveFlags algorithm) and publishes via configUpdatedPublisher.
+//
+//  FALLBACK channel: the resolveFlags HTTP call + pollTimer remain, but
+//  are demoted to a cold-start / fallback role — they paint the cache for
+//  the very first frame before the listener delivers, and they keep the
+//  app updating if Firebase init / sign-in fails.
 //
 
 import Foundation
@@ -25,6 +35,17 @@ public final class ArgusManager: RemoteFlags {
     private var defaults: [String: Any] = [:]
     private var pollTimer: Timer?
     private var isInitialFetch = true
+
+    /// Real-time push channel. `nil` until `configure(...)` runs, or when a
+    /// stream bootstrap failure has demoted the SDK to HTTP-only.
+    private var streamClient: StreamClient?
+
+    /// Set once the live stream has delivered at least one snapshot. While
+    /// `true`, the HTTP fallback stops emitting on `configUpdatedPublisher`
+    /// so the two channels never fight over the published cache (the stream
+    /// is authoritative once live).
+    private var streamIsLive = false
+    private let streamStateLock = NSLock()
 
     private let logger = Logger(subsystem: "cloud.projectargus.sdk", category: "ArgusManager")
 
@@ -105,11 +126,98 @@ public final class ArgusManager: RemoteFlags {
         defaults = DefaultsLoader.loadDefaults()
         writeCache(defaults)
 
-        // Trigger initial fetch (non-blocking)
+        // FALLBACK / cold-start: a single HTTP fetch paints the cache for
+        // the first frame before the live listener delivers, and the poll
+        // timer backstops a stream that never establishes. Once the stream
+        // goes live the poll stops emitting (see handleStreamSnapshot).
         refreshConfig()
-
-        // Start repeating poll timer on the main run loop
         startPollTimer(interval: config.pollInterval)
+
+        // PRIMARY: open the real-time push channel.
+        startStream(config: config)
+    }
+
+    /// Bootstrap the real-time listener channel. On any failure we log and
+    /// leave the HTTP fallback running — the app keeps updating, just on
+    /// the slower poll cadence.
+    private func startStream(config: ArgusConfiguration) {
+        let client = StreamClient(
+            configuration: config,
+            logger: logger,
+            onSnapshotChange: { [weak self] snapshot in
+                self?.handleStreamSnapshot(snapshot)
+            }
+        )
+        self.streamClient = client
+
+        Task { [weak self] in
+            do {
+                try await client.start()
+            } catch {
+                self?.logger.error("ArgusSDK stream bootstrap failed; falling back to HTTP poll: \(error.localizedDescription)")
+                // Demote: drop the stream client so deinit/stop is clean and
+                // the HTTP fallback remains the live channel.
+                self?.streamClient = nil
+            }
+        }
+    }
+
+    /// Re-resolve all flags from a fresh listener snapshot and publish.
+    ///
+    /// This is the live update path. Resolution mirrors the server
+    /// `resolveFlags` algorithm exactly (see `FlagResolver`).
+    private func handleStreamSnapshot(_ snapshot: StreamSnapshot) {
+        guard let configuration else { return }
+
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        // `platformAppId` is the Argus platform appId from the server's
+        // `config/platform` doc — NOT the Firebase appId. The scoped stream
+        // identity is not authorised to read `config/platform`, so we pass
+        // `nil`. Per `FlagResolver.evaluateCondition`, the appId clause is
+        // only enforced when BOTH the condition's `appId` and the context's
+        // `platformAppId` are present, so `nil` skips that clause exactly as
+        // the server does when it cannot resolve a platform appId.
+        let context = FlagResolutionContext(
+            platform: "ios",
+            version: appVersion,
+            userId: configuration.userId,
+            language: Locale.preferredLanguages.first,
+            platformAppId: nil,
+            tenantId: configuration.tenantId
+        )
+
+        let inputs: [FlagInput] = snapshot.flagDocs.map { (flagId, flagData) in
+            FlagInput(
+                flag: flagData,
+                env: snapshot.envDocs[flagId],
+                tenantOverride: snapshot.tenantDocs[flagId]
+            )
+        }
+
+        let resolved = FlagResolver.resolve(
+            flags: inputs,
+            conditionsByName: snapshot.conditionsByName,
+            context: context
+        )
+
+        // Strip server-`null`s and parse JSON-string values exactly as the
+        // HTTP path does, so both channels produce an identical cache shape.
+        let processed = processFlags(resolved)
+
+        // Mark the stream live on first delivery — disables fallback emission.
+        let wasLive = markStreamLive()
+
+        let oldCache = snapshotCache()
+        let changedKeys = computeDiff(old: oldCache, new: processed)
+        writeCache(processed)
+
+        if !wasLive {
+            // First live snapshot — treat as a full refresh.
+            isInitialFetch = false
+            configUpdatedPublisher.send(nil)
+        } else if !changedKeys.isEmpty {
+            configUpdatedPublisher.send(changedKeys)
+        }
     }
 
     // MARK: - Manual Refresh
@@ -253,6 +361,27 @@ public final class ArgusManager: RemoteFlags {
         cache = newFlags
     }
 
+    // MARK: - Stream-Live State
+
+    /// Whether the real-time stream has delivered at least one snapshot.
+    /// Synchronous so it is safe to call from `async` contexts (an inline
+    /// `NSLock.unlock()` in an async function is a Swift 6 error).
+    private func isStreamLive() -> Bool {
+        streamStateLock.lock()
+        defer { streamStateLock.unlock() }
+        return streamIsLive
+    }
+
+    /// Mark the stream live and return the PREVIOUS value, so the first
+    /// snapshot can be distinguished from subsequent ones in one atomic step.
+    private func markStreamLive() -> Bool {
+        streamStateLock.lock()
+        defer { streamStateLock.unlock() }
+        let previous = streamIsLive
+        streamIsLive = true
+        return previous
+    }
+
     // MARK: - Poll Timer
 
     private func startPollTimer(interval: TimeInterval) {
@@ -312,6 +441,13 @@ public final class ArgusManager: RemoteFlags {
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let flags = json["flags"] as? [String: Any] else {
                 logger.error("Invalid response shape ... missing 'flags' dictionary")
+                return
+            }
+
+            // FALLBACK gate: once the live stream has delivered a snapshot
+            // it is the authoritative channel. A late HTTP response must not
+            // clobber the live cache or double-emit, so we drop it silently.
+            if isStreamLive() {
                 return
             }
 
@@ -393,7 +529,19 @@ public final class ArgusManager: RemoteFlags {
         return changedKeys
     }
 
+    /// Tear down both channels: detach the real-time listeners (signing the
+    /// stream identity out) and stop the HTTP poll timer. Safe to call more
+    /// than once. The cache is left intact so synchronous accessors keep
+    /// returning the last-known values after a stop.
+    public func stop() {
+        streamClient?.stop()
+        streamClient = nil
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
     deinit {
+        streamClient?.stop()
         pollTimer?.invalidate()
     }
 

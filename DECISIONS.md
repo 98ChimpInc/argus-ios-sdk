@@ -1,5 +1,41 @@
 # Decisions Log
 
+## 2026-06-02 — Real-time push implementation notes
+
+**Decision**: Implemented the canonical real-time-push architecture (below) in
+the SDK. Key implementation choices:
+
+- **`FlagResolver` is a pure, dependency-free engine.** It takes plain
+  `[String: Any]` dictionaries (the shape Firestore hands back from
+  `snapshot.data()`) and mirrors the server `resolveFlags` algorithm in
+  `functions/index.js` exactly — archived/draft skipping, tenant-override
+  priority, priority-sorted version conditions, and FNV-1a rollout
+  bucketing. Keeping it free of Firebase types makes resolution fully
+  unit-testable without a live backend (`FlagResolverTests`).
+- **`StreamClient` owns all Firebase interaction** behind a private named
+  `FirebaseApp` (`ArgusSDK-<env>-<tenant>`) so the SDK never clashes with the
+  host app's default `FirebaseApp`. `ArgusManager` never imports Firebase.
+- **`platformAppId` is passed as `nil` to the on-device resolver.** The
+  server fills `platformAppId` from the `config/platform` doc, which the
+  scoped stream identity is not authorised to read. Per the shared
+  `evaluateCondition` logic, the appId clause only filters when BOTH the
+  condition's `appId` and the context's `platformAppId` are present, so
+  `nil` skips that clause exactly as the server does when it cannot resolve
+  a platform appId — no divergence, just a clause the client can't tighten.
+- **Stream beats poll once live.** The HTTP `resolveFlags` fetch + poll
+  timer remain as cold-start/fallback only. On the first live snapshot the
+  SDK sets a `streamIsLive` flag; thereafter late HTTP responses are dropped
+  so the two channels never fight over the cache.
+- **`FirebaseConfig` defaults to placeholder Argus prod values** (the
+  Firebase apiKey/appId/projectId are public client identifiers, not
+  secrets) with an `.emulator()` preset for local/harness testing. These
+  placeholders must be swapped for the real Argus prod project values
+  before publishing.
+
+**Verified**: `swift build` and all 56 unit tests pass; `xcodebuild` builds
+for the iOS Simulator (iPhone 17, iOS 15+ deployment target). Firebase 10.x
+resolved via SwiftPM.
+
 ## 2026-06-02 — ⭐ CANONICAL: real-time push via Firestore listeners (supersedes the HTTP-poll design)
 
 > **AUTHORITATIVE / owner-approved (shahin@98chimp.com).** Canonical record:
