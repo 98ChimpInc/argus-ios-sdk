@@ -150,6 +150,11 @@ final class StreamClient {
             throw StreamClientError.invalidBaseURL
         }
         components.path += "/issueStreamToken"
+        // #221: tell the server we're iOS so it returns the iOS Firebase
+        // config (a web appId is rejected by the native SDK with
+        // "invalid GOOGLE_APP_ID"). Preserves any existing query items.
+        components.queryItems = (components.queryItems ?? []) +
+            [URLQueryItem(name: "platform", value: "ios")]
         guard let url = components.url else {
             throw StreamClientError.invalidBaseURL
         }
