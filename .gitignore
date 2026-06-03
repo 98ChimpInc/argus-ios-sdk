@@ -6,3 +6,6 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 *.xcodeproj
+# Library packages don't pin Package.resolved — consumers resolve their own
+# dependency versions (Firebase 10.x, used by the real-time channel).
+Package.resolved

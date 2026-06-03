@@ -1,12 +1,17 @@
 # Argus iOS SDK
 
-Drop-in feature-flag client for iOS apps. Conforms to the `RemoteFlags` protocol, fetches resolved flag values from the Argus HTTP endpoint, and caches them locally for synchronous access.
+Drop-in feature-flag client for iOS apps. Conforms to the `RemoteFlags` protocol and exposes resolved flag values from a local cache for synchronous access.
+
+Flag changes are delivered to the app **in real time** over Firestore client listeners (`addSnapshotListener`). On start the SDK trades its Argus apiKey for a short-lived, scoped Firebase identity (via the `issueStreamToken` endpoint), signs in, and listens to its Product's flag / environment / tenant / condition documents. When an operator flips a flag in the Argus dashboard, the new value pushes to the device in roughly a second, and `configUpdatedPublisher` emits the changed keys. Per-user and per-version targeting (rollout bucketing + version conditions) is resolved **on-device**, mirroring the server's `resolveFlags` algorithm exactly.
+
+The `resolveFlags` HTTP endpoint and the poll timer are still present, but **demoted to a cold-start / fallback role**: the SDK does one HTTP fetch to paint the cache for the very first frame before the live listener delivers, and the poll loop keeps the app updating if Firebase init or sign-in ever fails. Once the live stream delivers its first snapshot it becomes authoritative, and late HTTP responses are dropped.
 
 ## Requirements
 
 - iOS 15.0+
 - Swift 5.9+
 - One Argus apiKey per environment, per Product (Argus dashboard → **Settings → API keys**)
+- The [Firebase iOS SDK](https://github.com/firebase/firebase-ios-sdk) (`FirebaseAuth` + `FirebaseFirestore`), pulled in transitively as a SwiftPM dependency — you do **not** set up your own Firebase project
 
 > **Argus apiKeys are scoped per Product *and* per environment.** Each Product in a workspace has **three** apiKeys — one for `dev`, one for `staging`, one for `prod` — shaped like `argus_dev_…`, `argus_staging_…`, `argus_prod_…`. The environment is baked into the key prefix, and the Argus server reads it directly from the key. You should use a different key per build target (DEBUG → dev key, TestFlight → staging key, App Store → prod key) so each build resolves the flags for its matching environment.
 >
@@ -14,7 +19,7 @@ Drop-in feature-flag client for iOS apps. Conforms to the `RemoteFlags` protocol
 >
 > **Backward compatibility.** Pre-M-2 unprefixed keys (the original `argus_<48-hex>` shape, with no `dev_`/`staging_`/`prod_` segment) continue to resolve as `prod` — no code change needed if you have already shipped against an older key. New integrations should use the env-prefixed keys.
 
-No Firebase dependency — the SDK authenticates with your Argus apiKey.
+**You provide only the Argus apiKey (and the endpoint base URL).** The SDK authenticates with your Argus apiKey, and the `issueStreamToken` endpoint hands back the Firebase project config alongside the scoped custom token — so the SDK **self-configures** the real-time channel from the server response. It stands up a **private, named `FirebaseApp`** under the hood so it never clashes with your host app's default Firebase configuration. There is no Firebase config to set up, and no `GoogleService-Info.plist` to add for Argus. (Pointing at the local Firebase Emulator Suite for development is the one case where you pass an explicit override — see [Local development](#local-development-against-the-firebase-emulator) below.)
 
 ## Installation
 
@@ -48,15 +53,39 @@ argus.configure(
     tenantId: "acme_ca"
 )
 // The Argus server reads the environment from the key prefix
-// (argus_<env>_...), so resolveFlags always returns the right
-// environment's values. The SDK's `environment:` parameter is
-// optional and only affects local display (see "Environment
+// (argus_<env>_...), so the real-time channel binds to the right
+// environment's docs (and the resolveFlags fallback returns the
+// right environment's values). The SDK's `environment:` parameter
+// is optional and only affects local display (see "Environment
 // auto-detection" below).
 
-// Synchronous reads from cache
+// Synchronous reads from cache. Values stay current automatically as
+// flags change in the Argus dashboard — observe configUpdatedPublisher
+// to react to live updates (see "Real-time updates" below).
 let enabled = argus.bool(forKey: "new_checkout_flow")
 let version = argus.string(forKey: "app_version")
 ```
+
+### Real-time updates
+
+Subscribe to `configUpdatedPublisher` to react when flag values change live. It emits `nil` on the first full refresh and a `Set<String>` of changed flag names on subsequent updates:
+
+```swift
+import Combine
+
+var cancellables = Set<AnyCancellable>()
+
+argus.configUpdatedPublisher
+    .receive(on: DispatchQueue.main)
+    .sink { changedKeys in
+        // changedKeys == nil  → initial / full refresh
+        // changedKeys == {…}  → these flags changed
+        refreshUI()
+    }
+    .store(in: &cancellables)
+```
+
+Call `argus.stop()` to detach the listeners and stop the fallback poll timer (for example on sign-out); they are also torn down automatically when the `ArgusManager` is deallocated.
 
 > If your project does not define a `TESTFLIGHT` compile flag, you can swap the middle branch for a runtime check on the App Store receipt URL (the same idiom the SDK uses for environment auto-detection). The key just needs to be the staging one whenever the build is heading to TestFlight.
 
@@ -144,11 +173,25 @@ Each `ArgusManager` maintains its own cache and only resolves flags belonging to
 
 ## Architecture
 
-- **ArgusManager** ... `RemoteFlags` conformance, HTTP fetch, thread-safe cache
-- **ArgusConfiguration** ... Configuration struct
-- **FNV1a** ... Deterministic FNV-1a hash for rollout bucketing (matches JS reference exactly)
-- **DefaultsLoader** ... Loads offline defaults from `RemoteConfigDefaults.plist`
+- **ArgusManager** ... `RemoteFlags` conformance, thread-safe cache, orchestrates the real-time stream (primary) and the HTTP poll (fallback)
+- **StreamClient** ... owns all Firebase interaction: `issueStreamToken` bootstrap, the private named `FirebaseApp`, custom-token sign-in, and the Firestore snapshot listeners
+- **FlagResolver** ... on-device resolution engine, a 1:1 mirror of the server `resolveFlags` algorithm (archived/draft skipping, tenant overrides, priority-sorted version conditions, rollout bucketing)
+- **ArgusConfiguration** ... configuration struct. `firebaseConfig` is an **optional override** that defaults to `nil` — when unset, the SDK self-configures from the `firebaseConfig` returned by `issueStreamToken`; an emulator preset (`.emulator()`) is provided to force the local Firebase Emulator Suite for testing
+- **FNV1a** ... deterministic FNV-1a hash for rollout bucketing (matches the JS reference exactly)
+- **DefaultsLoader** ... loads offline defaults from `RemoteConfigDefaults.plist`
 
-## Bootstrap Toggle
+## Local development against the Firebase Emulator
 
-The SDK is activated via a Firebase Remote Config flag (`argus_enabled`). See the full spec for integration details.
+For local testing (and the convergence harness), point Auth + Firestore at the Firebase Emulator Suite by passing an emulator `FirebaseConfig` override. In normal use `firebaseConfig` is left unset and the SDK self-configures from the server response; to force the emulator, build the `ArgusConfiguration` yourself and set `firebaseConfig: .emulator()` (the override always wins over the server-returned config):
+
+```swift
+let config = ArgusConfiguration(
+    apiKey: "argus_dev_<48-hex>",
+    baseURL: "http://127.0.0.1:5001/demo-argus/us-central1",
+    tenantId: "acme_ca",
+    environment: "dev",
+    firebaseConfig: .emulator() // demo-argus, 127.0.0.1, Auth 9099 / Firestore 8080
+)
+```
+
+The emulator preset disables on-disk persistence and SSL so it talks to the local emulators cleanly. In production the SDK uses Firestore's default persistent cache, so a cold launch renders the last-known values instantly.
