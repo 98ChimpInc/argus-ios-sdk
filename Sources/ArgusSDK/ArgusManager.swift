@@ -53,6 +53,14 @@ public final class ArgusManager: RemoteFlags {
 
     /// Configure the SDK and begin fetching flags.
     ///
+    /// The happy path is to pass **only the Argus apiKey and the base URL**
+    /// (plus a `tenantId`): the SDK trades the apiKey for a scoped Firebase
+    /// identity via `issueStreamToken`, and that response also carries the
+    /// Firebase project config the SDK uses to self-configure its real-time
+    /// channel — so you never set up Firebase yourself. (For local testing
+    /// against the emulator, build an `ArgusConfiguration` with an explicit
+    /// `firebaseConfig: .emulator()` override; see the README.)
+    ///
     /// This method returns immediately. The app is usable with bundled
     /// defaults until the first HTTP response arrives.
     ///
@@ -83,6 +91,10 @@ public final class ArgusManager: RemoteFlags {
     }
 
     /// Configure the SDK with an auto-detected environment.
+    ///
+    /// Pass **only the Argus apiKey and the base URL** (plus a `tenantId`);
+    /// the SDK self-configures Firebase from the `issueStreamToken` response,
+    /// so no Firebase setup is required on your side.
     ///
     /// This overload omits the `environment` argument and resolves it
     /// from the build context:

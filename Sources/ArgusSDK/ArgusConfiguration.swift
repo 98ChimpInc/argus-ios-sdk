@@ -11,11 +11,16 @@ import Foundation
 /// Firebase project parameters the SDK needs to stand up its own named
 /// `FirebaseApp` for the real-time listener channel.
 ///
-/// The consumer normally provides nothing here — the SDK ships with the
-/// Argus production project values as defaults, so a consumer only ever
-/// hands the SDK an Argus apiKey. The struct is exposed so local
-/// development and the convergence harness can point Auth + Firestore at
-/// the Firebase Emulator Suite.
+/// The consumer normally provides nothing here — `issueStreamToken` returns
+/// the Firebase project values alongside the scoped custom token, and the
+/// SDK self-configures from that server-returned config. So a consumer only
+/// ever hands the SDK an Argus apiKey (+ the endpoint base URL).
+///
+/// This struct is still exposed as an **optional override** on
+/// `ArgusConfiguration`: pass one only when you need to point Auth +
+/// Firestore at the Firebase Emulator Suite (local development / the
+/// convergence harness) or otherwise pin a specific project. When the
+/// override is `nil`, the server-returned config wins.
 public struct FirebaseConfig {
 
     /// Firebase project ID (`GoogleService-Info.plist` → PROJECT_ID).
@@ -27,6 +32,19 @@ public struct FirebaseConfig {
 
     /// Firebase iOS app ID (`GoogleService-Info.plist` → GOOGLE_APP_ID).
     public let appId: String
+
+    /// Firebase Auth domain (e.g. `argus-app-f0ff3.firebaseapp.com`).
+    /// Optional — Auth + Firestore on the client function without it, but
+    /// it is populated on `FirebaseOptions` when the server supplies it.
+    public let authDomain: String?
+
+    /// Firebase Cloud Storage bucket. Optional — unused by Auth/Firestore,
+    /// carried through for completeness when the server supplies it.
+    public let storageBucket: String?
+
+    /// Firebase Cloud Messaging sender ID. Optional — unused by
+    /// Auth/Firestore on this channel, carried through when supplied.
+    public let messagingSenderId: String?
 
     /// When `true`, Auth and Firestore are pointed at the local Firebase
     /// Emulator Suite instead of production. Used by local development and
@@ -46,6 +64,9 @@ public struct FirebaseConfig {
         projectId: String,
         apiKey: String,
         appId: String,
+        authDomain: String? = nil,
+        storageBucket: String? = nil,
+        messagingSenderId: String? = nil,
         useEmulator: Bool = false,
         emulatorHost: String = "127.0.0.1",
         authEmulatorPort: Int = 9099,
@@ -54,26 +75,20 @@ public struct FirebaseConfig {
         self.projectId = projectId
         self.apiKey = apiKey
         self.appId = appId
+        self.authDomain = authDomain
+        self.storageBucket = storageBucket
+        self.messagingSenderId = messagingSenderId
         self.useEmulator = useEmulator
         self.emulatorHost = emulatorHost
         self.authEmulatorPort = authEmulatorPort
         self.firestoreEmulatorPort = firestoreEmulatorPort
     }
 
-    /// Argus's production Firebase project. These are PLACEHOLDER values —
-    /// the Firebase apiKey/appId/projectId are not secrets (they ship in
-    /// every Firebase client app), but they must be replaced with the real
-    /// Argus prod project values before the SDK is published. The
-    /// authorisation that actually gates reads is the scoped custom token
-    /// from `issueStreamToken`, not these identifiers.
-    public static let argusProduction = FirebaseConfig(
-        projectId: "argus-app-f0ff3",
-        apiKey: "AIzaSyD-ARGUS-PROD-PLACEHOLDER-REPLACE-ME",
-        appId: "1:000000000000:ios:argusprodplaceholder"
-    )
-
-    /// Convenience config pointing at the local Firebase Emulator Suite,
-    /// using the harness project ID `demo-argus`.
+    /// Convenience override pointing at the local Firebase Emulator Suite,
+    /// using the harness project ID `demo-argus`. Pass this as
+    /// `ArgusConfiguration.firebaseConfig` to force the emulator path; when
+    /// it is omitted, the server-returned config is used instead (and the
+    /// server itself decides `useEmulator` via the response).
     public static func emulator(
         projectId: String = "demo-argus",
         host: String = "127.0.0.1",
@@ -120,10 +135,15 @@ public struct ArgusConfiguration {
     /// fallback that backstops a dropped or never-established listener.
     public let pollInterval: TimeInterval
 
-    /// Firebase project parameters for the real-time listener channel.
-    /// Defaults to Argus's production project; override only for local
-    /// development against the emulator.
-    public let firebaseConfig: FirebaseConfig
+    /// Optional Firebase override for the real-time listener channel.
+    ///
+    /// Leave this `nil` (the default) for normal use — the SDK self-configures
+    /// from the `firebaseConfig` returned by `issueStreamToken`, so the
+    /// consumer supplies only the Argus apiKey (+ base URL). Set it only to
+    /// pin a specific project or to force the Firebase Emulator Suite for
+    /// local development (`firebaseConfig: .emulator()`). When non-`nil`, this
+    /// override takes precedence over the server-returned config.
+    public let firebaseConfig: FirebaseConfig?
 
     /// Auto-detected environment based on build context.
     ///
@@ -184,7 +204,7 @@ public struct ArgusConfiguration {
         environment: String,
         userId: String? = nil,
         pollInterval: TimeInterval = 300,
-        firebaseConfig: FirebaseConfig = .argusProduction
+        firebaseConfig: FirebaseConfig? = nil
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
@@ -206,7 +226,7 @@ public struct ArgusConfiguration {
         tenantId: String,
         userId: String? = nil,
         pollInterval: TimeInterval = 300,
-        firebaseConfig: FirebaseConfig = .argusProduction
+        firebaseConfig: FirebaseConfig? = nil
     ) {
         self.init(
             apiKey: apiKey,

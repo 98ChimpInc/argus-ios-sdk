@@ -28,6 +28,11 @@ struct StreamToken {
     let productId: String
     let env: String
     let tenantId: String?
+    /// Firebase project config the server hands back so the SDK can
+    /// self-configure its private named `FirebaseApp`. Used unless the
+    /// consumer supplied an explicit `ArgusConfiguration.firebaseConfig`
+    /// override.
+    let firebaseConfig: FirebaseConfig
 }
 
 /// Errors that demote the SDK to the HTTP fallback path.
@@ -108,7 +113,10 @@ final class StreamClient {
         let token = try await fetchStreamToken()
         self.token = token
 
-        let (firestore, auth) = configureFirebase()
+        // Self-configure from the server-returned Firebase config unless the
+        // consumer supplied an explicit override (e.g. the emulator preset).
+        let firebaseConfig = configuration.firebaseConfig ?? token.firebaseConfig
+        let (firestore, auth) = configureFirebase(firebaseConfig)
         self.firestore = firestore
         self.auth = auth
 
@@ -166,12 +174,41 @@ final class StreamClient {
         }
         let tenantId = json["tenantId"] as? String
 
+        guard let firebaseConfig = Self.parseFirebaseConfig(json["firebaseConfig"]) else {
+            throw StreamClientError.malformedTokenResponse
+        }
+
         return StreamToken(
             token: token,
             customerId: customerId,
             productId: productId,
             env: env,
-            tenantId: tenantId
+            tenantId: tenantId,
+            firebaseConfig: firebaseConfig
+        )
+    }
+
+    /// Parse the `firebaseConfig` object from the `issueStreamToken` response
+    /// into a `FirebaseConfig`. Requires `projectId`, `apiKey`, and `appId`;
+    /// returns `nil` if any are missing (treated as a malformed response so
+    /// the SDK demotes to the HTTP fallback). The emulator host/ports fall
+    /// back to `ArgusConfiguration`'s defaults (127.0.0.1 / 9099 / 8080).
+    static func parseFirebaseConfig(_ raw: Any?) -> FirebaseConfig? {
+        guard let dict = raw as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let apiKey = dict["apiKey"] as? String,
+              let appId = dict["appId"] as? String else {
+            return nil
+        }
+
+        return FirebaseConfig(
+            projectId: projectId,
+            apiKey: apiKey,
+            appId: appId,
+            authDomain: dict["authDomain"] as? String,
+            storageBucket: dict["storageBucket"] as? String,
+            messagingSenderId: dict["messagingSenderId"] as? String,
+            useEmulator: (dict["useEmulator"] as? Bool) ?? false
         )
     }
 
@@ -179,19 +216,27 @@ final class StreamClient {
 
     /// Stand up a private named FirebaseApp and return scoped Auth +
     /// Firestore instances. Reuses the named app if it already exists.
-    private func configureFirebase() -> (Firestore, Auth) {
-        let fb = configuration.firebaseConfig
-
+    ///
+    /// `fb` is the resolved config: the consumer's explicit override when
+    /// set, otherwise the config the server returned from `issueStreamToken`.
+    private func configureFirebase(_ fb: FirebaseConfig) -> (Firestore, Auth) {
         let app: FirebaseApp
         if let existing = FirebaseApp.app(name: appName) {
             app = existing
         } else {
             let options = FirebaseOptions(
                 googleAppID: fb.appId,
-                gcmSenderID: "" // not used by Auth/Firestore on the client
+                gcmSenderID: fb.messagingSenderId ?? "" // not used by Auth/Firestore on the client
             )
             options.apiKey = fb.apiKey
             options.projectID = fb.projectId
+            // `authDomain` is a Firebase JS-SDK concept; the iOS
+            // `FirebaseOptions` has no such field, and Auth + Firestore on
+            // the client do not need it, so it is parsed and retained on
+            // `FirebaseConfig` for completeness but not applied here.
+            if let storageBucket = fb.storageBucket {
+                options.storageBucket = storageBucket
+            }
             FirebaseApp.configure(name: appName, options: options)
             app = FirebaseApp.app(name: appName)!
         }

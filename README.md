@@ -19,7 +19,7 @@ The `resolveFlags` HTTP endpoint and the poll timer are still present, but **dem
 >
 > **Backward compatibility.** Pre-M-2 unprefixed keys (the original `argus_<48-hex>` shape, with no `dev_`/`staging_`/`prod_` segment) continue to resolve as `prod` — no code change needed if you have already shipped against an older key. New integrations should use the env-prefixed keys.
 
-The SDK authenticates with your Argus apiKey. It uses Argus's own Firebase project under the hood for the real-time channel and stands up a **private, named `FirebaseApp`** so it never clashes with your host app's default Firebase configuration. You provide only the Argus apiKey for normal use.
+**You provide only the Argus apiKey (and the endpoint base URL).** The SDK authenticates with your Argus apiKey, and the `issueStreamToken` endpoint hands back the Firebase project config alongside the scoped custom token — so the SDK **self-configures** the real-time channel from the server response. It stands up a **private, named `FirebaseApp`** under the hood so it never clashes with your host app's default Firebase configuration. There is no Firebase config to set up, and no `GoogleService-Info.plist` to add for Argus. (Pointing at the local Firebase Emulator Suite for development is the one case where you pass an explicit override — see [Local development](#local-development-against-the-firebase-emulator) below.)
 
 ## Installation
 
@@ -176,13 +176,13 @@ Each `ArgusManager` maintains its own cache and only resolves flags belonging to
 - **ArgusManager** ... `RemoteFlags` conformance, thread-safe cache, orchestrates the real-time stream (primary) and the HTTP poll (fallback)
 - **StreamClient** ... owns all Firebase interaction: `issueStreamToken` bootstrap, the private named `FirebaseApp`, custom-token sign-in, and the Firestore snapshot listeners
 - **FlagResolver** ... on-device resolution engine, a 1:1 mirror of the server `resolveFlags` algorithm (archived/draft skipping, tenant overrides, priority-sorted version conditions, rollout bucketing)
-- **ArgusConfiguration** ... configuration struct, including the optional `FirebaseConfig` (defaults to Argus production; an emulator preset is provided for local testing)
+- **ArgusConfiguration** ... configuration struct. `firebaseConfig` is an **optional override** that defaults to `nil` — when unset, the SDK self-configures from the `firebaseConfig` returned by `issueStreamToken`; an emulator preset (`.emulator()`) is provided to force the local Firebase Emulator Suite for testing
 - **FNV1a** ... deterministic FNV-1a hash for rollout bucketing (matches the JS reference exactly)
 - **DefaultsLoader** ... loads offline defaults from `RemoteConfigDefaults.plist`
 
 ## Local development against the Firebase Emulator
 
-For local testing (and the convergence harness), point Auth + Firestore at the Firebase Emulator Suite by passing an emulator `FirebaseConfig`. The consumer-facing `configure(...)` defaults to Argus production; to override, build the `ArgusConfiguration` yourself:
+For local testing (and the convergence harness), point Auth + Firestore at the Firebase Emulator Suite by passing an emulator `FirebaseConfig` override. In normal use `firebaseConfig` is left unset and the SDK self-configures from the server response; to force the emulator, build the `ArgusConfiguration` yourself and set `firebaseConfig: .emulator()` (the override always wins over the server-returned config):
 
 ```swift
 let config = ArgusConfiguration(
