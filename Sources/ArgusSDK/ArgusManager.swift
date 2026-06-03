@@ -27,6 +27,12 @@ public final class ArgusManager: RemoteFlags {
 
     public let configUpdatedPublisher = PassthroughSubject<Set<String>?, Never>()
 
+    // Public no-arg initializer. Without it Swift synthesizes an `internal`
+    // init, so `ArgusManager()` is inaccessible to consumer apps (the
+    // documented usage). All stored properties below have defaults / are
+    // optional, so an empty init is sufficient; `configure(...)` does setup.
+    public init() {}
+
     // MARK: - Internal State
 
     private var configuration: ArgusConfiguration?
