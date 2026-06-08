@@ -116,7 +116,7 @@ final class StreamClient {
         // Self-configure from the server-returned Firebase config unless the
         // consumer supplied an explicit override (e.g. the emulator preset).
         let firebaseConfig = configuration.firebaseConfig ?? token.firebaseConfig
-        let (firestore, auth) = configureFirebase(firebaseConfig)
+        let (firestore, auth) = try await configureFirebase(firebaseConfig)
         self.firestore = firestore
         self.auth = auth
 
@@ -224,25 +224,48 @@ final class StreamClient {
     ///
     /// `fb` is the resolved config: the consumer's explicit override when
     /// set, otherwise the config the server returned from `issueStreamToken`.
-    private func configureFirebase(_ fb: FirebaseConfig) -> (Firestore, Auth) {
+    private func configureFirebase(_ fb: FirebaseConfig) async throws -> (Firestore, Auth) {
         let app: FirebaseApp
         if let existing = FirebaseApp.app(name: appName) {
             app = existing
         } else {
-            let options = FirebaseOptions(
-                googleAppID: fb.appId,
-                gcmSenderID: fb.messagingSenderId ?? "" // not used by Auth/Firestore on the client
-            )
-            options.apiKey = fb.apiKey
-            options.projectID = fb.projectId
-            // `authDomain` is a Firebase JS-SDK concept; the iOS
-            // `FirebaseOptions` has no such field, and Auth + Firestore on
-            // the client do not need it, so it is parsed and retained on
-            // `FirebaseConfig` for completeness but not applied here.
-            if let storageBucket = fb.storageBucket {
-                options.storageBucket = storageBucket
+            // Reject a wrong-platform appID before configuring. iOS
+            // `FirebaseOptions` rejects a non-`:ios:` googleAppID by raising
+            // an Objective-C `NSException` from `FirebaseApp.configure` — it
+            // is not a Swift `Error`, so it bypasses this `throws` path and
+            // crashes the host (this is exactly what a `:web:` appID did to
+            // Unison). Throwing here demotes the SDK to its HTTP fallback
+            // instead. The emulator preset uses a synthetic `:ios:` id, so it
+            // passes this guard.
+            guard fb.appId.contains(":ios:") else {
+                logger.error("ArgusSDK: server returned a non-iOS Firebase appID (\(fb.appId, privacy: .public)); falling back to HTTP poll")
+                throw StreamClientError.malformedTokenResponse
             }
-            FirebaseApp.configure(name: appName, options: options)
+
+            // `FirebaseApp.configure` triggers eager component init
+            // (FirebaseAuth → GULAppDelegateSwizzler), which reads
+            // `-[UIApplication delegate]` / `setDelegate:` — main-thread-only
+            // APIs. `start()` runs on a background task, so do the configure
+            // on the main actor to avoid tripping Main Thread Checker. Build
+            // `options` *inside* the hop so no non-Sendable value crosses the
+            // actor boundary — capture only the Sendable `name` and `fb`.
+            let name = appName
+            await MainActor.run {
+                let options = FirebaseOptions(
+                    googleAppID: fb.appId,
+                    gcmSenderID: fb.messagingSenderId ?? "" // not used by Auth/Firestore on the client
+                )
+                options.apiKey = fb.apiKey
+                options.projectID = fb.projectId
+                // `authDomain` is a Firebase JS-SDK concept; the iOS
+                // `FirebaseOptions` has no such field, and Auth + Firestore on
+                // the client do not need it, so it is parsed and retained on
+                // `FirebaseConfig` for completeness but not applied here.
+                if let storageBucket = fb.storageBucket {
+                    options.storageBucket = storageBucket
+                }
+                FirebaseApp.configure(name: name, options: options)
+            }
             app = FirebaseApp.app(name: appName)!
         }
         self.firebaseApp = app

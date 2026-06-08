@@ -21,7 +21,7 @@ import Foundation
 /// Firestore at the Firebase Emulator Suite (local development / the
 /// convergence harness) or otherwise pin a specific project. When the
 /// override is `nil`, the server-returned config wins.
-public struct FirebaseConfig {
+public struct FirebaseConfig: Sendable {
 
     /// Firebase project ID (`GoogleService-Info.plist` → PROJECT_ID).
     public let projectId: String
