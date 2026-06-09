@@ -20,15 +20,18 @@ let package = Package(
         // that push flag changes into configUpdatedPublisher.
         .package(
             url: "https://github.com/firebase/firebase-ios-sdk",
-            // Range spans 10.x–12.x so the package co-resolves with host apps
-            // on any current Firebase major: 11.x (DK Derby on 11.14.0) and
-            // 12.x (Chordy on 12.8.0 — see argus-web-app#272). SPM `from:` is
-            // up-to-next-major (one major only); the explicit range avoids the
-            // "depends on firebase-ios-sdk 10..<12 and root depends on 12.x"
-            // resolution failure. The SDK only uses the stable FirebaseApp /
-            // FirebaseAuth (custom token) / FirebaseFirestore (listeners) APIs,
-            // which are source-compatible across 10–12.
-            "10.0.0" ..< "13.0.0"
+            // NO practical upper cap. ArgusSDK is a leaf dependency consumed
+            // inside host apps, and the HOST app owns its firebase-ios-sdk
+            // major. A tight cap (e.g. ..<12 or ..<13) causes a hard SPM
+            // resolution conflict for any app ahead of the cap — recurring on
+            // every Firebase major (this is what blocked Chordy on 12.8 in
+            // argus-web-app#272, and DK Derby on 11.x before it). SPM `from:`
+            // is up-to-next-major (one major only), so it does NOT mean
+            // "any >= 10" — hence the explicit wide range. The SDK only touches
+            // stable FirebaseApp / FirebaseAuth (custom token) / FirebaseFirestore
+            // (listeners) APIs; if a future major ever breaks that small surface
+            // we patch + tag, which is far cheaper than blocking every adopter.
+            "10.0.0" ..< "100.0.0"
         ),
     ],
     targets: [
