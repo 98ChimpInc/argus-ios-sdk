@@ -80,6 +80,11 @@ final class StreamClient {
     private var tenantDocs: [String: [String: Any]] = [:]
     private var conditionsByName: [String: [String: Any]] = [:]
 
+    /// Holds the first consolidated emission until every flag's env (and
+    /// tenant, when scoped) listener has delivered once — see #16. Mutated
+    /// only under `stateLock`.
+    private var firstEmission = FirstEmissionGate()
+
     private let stateLock = NSLock()
 
     /// Invoked on ANY listener change with a fresh consolidated snapshot.
@@ -372,6 +377,7 @@ final class StreamClient {
             stateLock.lock()
             envDocs[staleId] = nil
             tenantDocs[staleId] = nil
+            firstEmission.drop(flagId: staleId)
             stateLock.unlock()
         }
 
@@ -379,6 +385,14 @@ final class StreamClient {
         for flagId in currentFlagIds.subtracting(knownEnvFlagIds) {
             attachEnvListener(flagId: flagId, firestore: firestore, token: token)
         }
+
+        // #16: the flags snapshot has now been processed, so every flag it
+        // contains has been `expect`ed. Only now may the gate open — this stops
+        // the independent conditions listener from opening it early on an empty
+        // flag set and emitting an all-defaults snapshot before flags arrive.
+        stateLock.lock()
+        firstEmission.flagsSnapshotArrived()
+        stateLock.unlock()
 
         emitSnapshot()
     }
@@ -390,6 +404,14 @@ final class StreamClient {
         firestore: Firestore,
         token: StreamToken
     ) {
+        // #16: wait for this flag's env (and tenant) listener to deliver once
+        // before the first emission. Firestore invokes listeners asynchronously,
+        // never synchronously inside `addSnapshotListener`, so every `expect`
+        // for the initial flag set lands before any `arrived` can clear it.
+        stateLock.lock()
+        firstEmission.expect(flagId: flagId, tenantScoped: token.tenantId != nil)
+        stateLock.unlock()
+
         let envRef = firestore.collection("flags").document(flagId)
             .collection("environments").document(token.env)
 
@@ -397,10 +419,19 @@ final class StreamClient {
             guard let self else { return }
             if let error {
                 self.logger.error("ArgusSDK env listener error for \(flagId): \(error.localizedDescription)")
+                // #16: a first-callback error must not wedge the initial emission
+                // forever — settle this flag's gate slot (it stays on its default
+                // until a later retry delivers the real value) so the stream can
+                // still go live and the HTTP fallback isn't the only channel.
+                self.stateLock.lock()
+                self.firstEmission.envArrived(flagId: flagId)
+                self.stateLock.unlock()
+                self.emitSnapshot()
                 return
             }
             self.stateLock.lock()
             self.envDocs[flagId] = snapshot?.data()
+            self.firstEmission.envArrived(flagId: flagId)
             self.stateLock.unlock()
             self.emitSnapshot()
         }
@@ -412,11 +443,17 @@ final class StreamClient {
             guard let self else { return }
             if let error {
                 self.logger.error("ArgusSDK tenant listener error for \(flagId): \(error.localizedDescription)")
+                // #16: don't let a first-callback error wedge the initial emission.
+                self.stateLock.lock()
+                self.firstEmission.tenantArrived(flagId: flagId)
+                self.stateLock.unlock()
+                self.emitSnapshot()
                 return
             }
             self.stateLock.lock()
             // Store `nil` when the doc does not exist (no override).
             self.tenantDocs[flagId] = (snapshot?.exists == true) ? snapshot?.data() : nil
+            self.firstEmission.tenantArrived(flagId: flagId)
             self.stateLock.unlock()
             self.emitSnapshot()
         }
@@ -425,6 +462,13 @@ final class StreamClient {
     /// Build a consolidated snapshot under the lock and hand it to the owner.
     private func emitSnapshot() {
         stateLock.lock()
+        // #16: hold the FIRST emission until every flag's env (and tenant, when
+        // scoped) listener has delivered once, so the consumer's first snapshot
+        // carries real env values instead of defaults. Opens permanently after.
+        guard firstEmission.shouldEmit() else {
+            stateLock.unlock()
+            return
+        }
         let snapshot = StreamSnapshot(
             flagDocs: flagDocs,
             envDocs: envDocs,
