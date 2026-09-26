@@ -5,6 +5,12 @@ All notable changes to the Argus iOS SDK are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] - 2026-09-26
+
+### Fixed
+
+- The first real-time stream emission no longer resolves flags to their default values before the per-flag environment documents arrive. The SDK now holds the first consolidated emission until every flag in the initial snapshot has had its environment listener — and, for tenant-scoped API keys, its tenant-override listener — deliver at least once, so the consumer's first snapshot carries real resolved values instead of a one-beat defaults flash. On Loomi this had shown a whitelisted account as non-premium for ~1s after launch. (#16)
+
 ## [1.0.3] - 2026-06-09
 
 ### Changed
@@ -37,6 +43,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **v1.0.0 can crash on launch** if the host app calls `FirebaseApp.configure()` after the SDK's self-configuration races on a background thread. Fixed in v1.0.1+. **Pin 1.0.1 or later.**
 
+[1.0.4]: https://github.com/98ChimpInc/argus-ios-sdk/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/98ChimpInc/argus-ios-sdk/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/98ChimpInc/argus-ios-sdk/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/98ChimpInc/argus-ios-sdk/compare/v1.0.0...v1.0.1
